@@ -49,7 +49,7 @@ def gauss_iter_solve(A,b,x0=None,tol=1e-8,alg='seidel'):
     x = x0.copy() if x0 is not None else np.zeros(n_cols)
         
     # Iterative loop
-    max_iter = 10000
+    max_iter = 100000
     for iteration in range(max_iter):
         x_new = np.zeros_like(x) # To same shape
         for i in range(n_cols):
@@ -61,7 +61,7 @@ def gauss_iter_solve(A,b,x0=None,tol=1e-8,alg='seidel'):
                     else:  # Gauss-Seidel
                         s += A[i, j] * x_new[j] if j < i else A[i, j] * x[j]
             x_new[i] = (b[i] - s) / A[i, i]
-
+    
         # Check relative error
         rel_error = np.linalg.norm(x_new - x, ord=np.inf) / np.linalg.norm(x_new, ord=np.inf)
         if rel_error < tol:
@@ -73,18 +73,111 @@ def gauss_iter_solve(A,b,x0=None,tol=1e-8,alg='seidel'):
     print("RuntimeWarning: Maximum iterations reached without convergence")
     return x
 
-def spline_function(xd, yd, order):
-    """Multiply two numbers or arrays.
+import numpy as np
+
+def spline_function(xd, yd, order=3):
+    """
+    Generate a spline interpolation function.
+    
     Parameters
     ----------
-    x : int or float or array_like
-    The first number to multiply.
-    y : int or float or array_like
-    The second number to multiply.
+    xd : array_like, independent variable, must be increasing
+    yd : array_like, dependent variable, same length as xd
+    order : int, 1 (linear), 2 (quadratic), 3 (cubic), default=3
+    
     Returns
     -------
-    int or float or array_like
-    The (element-wise) product of x and y.
+    f : function, callable that takes scalar or array of x values
     """
-    return None
+    # Convert to numpy arrays
+    xd = np.array(xd, dtype=float).flatten()
+    yd = np.array(yd, dtype=float).flatten()
+
+    # Error checks
+    if xd.shape[0] != yd.shape[0]:
+        raise ValueError(f"xd and yd must have same length, got {xd.shape[0]} and {yd.shape[0]}")
+    if len(np.unique(xd)) != xd.shape[0]:
+        raise ValueError("xd contains repeated values")
+    if not np.all(np.diff(xd) > 0): # We can use this insted of np.sort()
+        raise ValueError("xd must be strictly increasing")
+    if order not in [1, 2, 3]:
+        raise ValueError("order must be 1, 2, or 3")
+
+    n = len(xd)
+    h = np.diff(xd)  # intervals between points
+
+    # Linear spline coefficients
+    if order == 1:
+        slopes = np.diff(yd) / h
+
+        def f(x_val):
+            x_val = np.asarray(x_val, dtype=float)
+            if np.any(x_val < xd[0]) or np.any(x_val > xd[-1]):
+                raise ValueError(f"x out of bounds: xmin={xd[0]}, xmax={xd[-1]}")
+            # Find interval index
+            idx = np.searchsorted(xd, x_val) - 1
+            idx[idx < 0] = 0  # handle edge case
+            return yd[idx] + slopes[idx] * (x_val - xd[idx])
+        return f
+
+    # Quadratic spline (natural boundary: second derivative at first point = 0)
+    elif order == 2:
+        # Solve for c_i coefficients (second derivative)
+        A = np.zeros((n, n))
+        b = np.zeros(n)
+        A[0, 0] = 1  # natural BC: S0'' = 0
+        b[0] = 0
+        for i in range(1, n-1):
+            A[i, i-1] = h[i-1]
+            A[i, i] = 2*(h[i-1] + h[i])
+            A[i, i+1] = h[i]
+            b[i] = 3*((yd[i+1]-yd[i])/h[i] - (yd[i]-yd[i-1])/h[i-1])
+        A[-1, -1] = 1  # natural BC at end
+        b[-1] = 0
+        c = np.linalg.solve(A, b)
+
+        # Coefficients for each interval: a + b*(x-xi) + c*(x-xi)^2
+        a = yd[:-1]
+        b_coef = (yd[1:] - yd[:-1])/h - h*(2*c[:-1] + c[1:])/3
+        c_coef = c[:-1]
+
+        def f(x_val):
+            x_val = np.asarray(x_val, dtype=float)
+            if np.any(x_val < xd[0]) or np.any(x_val > xd[-1]):
+                raise ValueError(f"x out of bounds: xmin={xd[0]}, xmax={xd[-1]}")
+            idx = np.searchsorted(xd, x_val) - 1
+            idx[idx < 0] = 0
+            dx = x_val - xd[idx]
+            return a[idx] + b_coef[idx]*dx + c_coef[idx]*dx**2
+        return f
+
+    # Cubic spline (natural)
+    else:
+        # Solve for M_i = second derivatives
+        A = np.zeros((n, n))
+        rhs = np.zeros(n)
+        A[0, 0] = 1
+        A[-1, -1] = 1
+        for i in range(1, n-1):
+            A[i, i-1] = h[i-1]
+            A[i, i] = 2*(h[i-1] + h[i])
+            A[i, i+1] = h[i]
+            rhs[i] = 3*((yd[i+1]-yd[i])/h[i] - (yd[i]-yd[i-1])/h[i-1])
+        M = np.linalg.solve(A, rhs)
+
+        # Compute coefficients for each interval
+        a = yd[:-1]
+        b_coef = (yd[1:] - yd[:-1])/h - h*(2*M[:-1] + M[1:])/3
+        c_coef = M[:-1]
+        d_coef = (M[1:] - M[:-1])/(3*h)
+
+        def f(x_val):
+            x_val = np.asarray(x_val, dtype=float)
+            if np.any(x_val < xd[0]) or np.any(x_val > xd[-1]):
+                raise ValueError(f"x out of bounds: xmin={xd[0]}, xmax={xd[-1]}")
+            idx = np.searchsorted(xd, x_val) - 1
+            idx[idx < 0] = 0
+            dx = x_val - xd[idx]
+            return a[idx] + b_coef[idx]*dx + c_coef[idx]*dx**2 + d_coef[idx]*dx**3
+        return f
 
