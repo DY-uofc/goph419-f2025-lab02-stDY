@@ -1,5 +1,5 @@
 import numpy as np
-from my_python_package.operators import (
+from my_python_package.linalg_interp import (
     add,
     multiply,
     )
